@@ -1,0 +1,5 @@
+name: siem-connector-enriched
+tests: []
+$schema: https://schemas.humio.com/parser/v0.1.0
+script: ''
+tagFields: []
