@@ -1,23 +1,206 @@
+[![CI](https://github.com/Trifork-Security/cses2humio/actions/workflows/CI.yml/badge.svg)](https://github.com/Trifork-Security/cses2humio/actions/workflows/CI.yml)
+
 # CrowdStrike Falcon Event Stream to Humio
 
 This project intend to provide a simple way of moving your CrowdStrike Falcon Event Stream data into Humio.  
-As is the only reliable way of getting Event Stream data is with CrowdStrike's SIEM connector, that dumps to files.  
+As is the only reliable way of getting Event Stream data is with CrowdStrike's SIEM connector, that dumps to multiple files.  
 We're trying to bypass the file stage and ship this directly to Humio and streamline ingest, providing CrowdStrike customers  
 with Humio a simple way to maintain, visualize and alert on Falcon Event Stream data.
+
+<br />
 
 ## Design
 
 This project is build as a Python package (application) to be shipped within a Docker or other containerized environment.
-The applications error handling could be better, and the primary way to respond to unexpected errors is to shutdown, relying on docker to restart the process.
+The application error handling could be better, and the primary way to respond to unexpected errors is to shut down, relying on docker to restart the process.
+
+<br />
+
+## Prerequisite
+
+For setting up the connection you need two types of credentials ready.
+
+- [Falcon API key-pair with read permissions to Event Streams](#obtaining-falcon-api-key-pair)
+- [Humio ingest token to the repository receiving the data](#obtaining-humio-ingest-token)
+
+For running the code one of the following is needed.
+
+- Docker with access to persistent volume
+- Python3 (with virtual environment recommended!)
+
+<br />
+
+### Obtaining Falcon API key-pair
+
+* Login to your Falcon Console
+* Go to Menu -> Support -> API Clients and Keys
+* Click `Add new API client`
+    * Set the client a name
+    * Optional: fill the description
+    * Assign `Event streams/read` access
+
+![falcon_token](docs/images/falcon_token.png)
+
+<br />
+
+### Obtaining Humio Ingest Token
+
+* Login to your Humio cluster
+* Go to the repository you're going to use
+* Depending on if you're going to run enriched or not.
+
+    * Enriched: Download the [siem-connector-enriched.yaml](siem-connector-enriched.yaml) parser
+
+        * Go to `Parsers` and click `New Parser` then select `From template` 
+
+        * Give the parser a name, note, this is going to be assigned the `#type` field. E.g. `siem-connector-enriched`
+
+        * Upload the yaml specification. This is for now an empty parser, you can simply create an empty parser yourself as well.
+
+    * Normal: Install the package `crowdstrike/siem-connector` by doing the following<br />Note that enriched event can use thhis content as well
+
+        * Go to `Settings` -> `Marketplace` -> `crowdstrike/siem-connector` and click `Install package` -> `Install`
+
+* Go to `Settings` -> `Ingest tokens` and click `Add token`
+
+    * Give the ingest token a good name
+
+    * Enriched: assign the parser you created in previous step
+
+    * Normal: select the `crowdstrike/siem-connector` -> `siem-connector`
+
+![humio_token](docs/images/humio_token.png)
+
+<br />
 
 ## Installation
 
-I will fill this out later
+We recommend using the docker image unless you plan around creating this as a systemd service or similar.
+
+```shell
+# Clone the sample environment file
+wget https://raw.githubusercontent.com/Trifork-Security/cses2humio/master/cses2humio.env.example -O cses2humio.env
+```
+
+Modify the attributes accordingly, for more information see [Command line and arguments](#command-line-and-arguments)
+
+Start the container with the newly configured environment file
+
+```shell
+docker run -v $HOST_DATA_DIR:/data  \
+    --name=cses2humio \
+    --env-file=$PATH_TO_CONFIG_FILE \
+    --detach --restart=always \
+    ghcr.io/trifork-security/cses2humio:latest
+```
+
+See your data coming in!
+
+```shell
+docker logs -f cses2humio
+```
+
+<br />
+
+## Command line and arguments
+
+You can specify run arguments as command lines or environment variables (same as command line, just all uppercase)
+
+| Argument            | Environment       | Default                     | Description                                                                                                                                                 |
+|---------------------|-------------------|-----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| --offset-file       | OFFSET_FILE       | offset.db                   | General: Where to save offsets for partitions. File will be created automatically<br />Note that the `cses2humio.env.example` defaults to `/data/offset.db` |
+| --enrich            | ENRICH            | False                       | General: Parses the events before shipping to Humio, and expands some fields due to such parsing in Humio can be tricky                                     |
+| --verbose           | VERBOSE           | False                       | General: Be verbose, use for debugging and troubleshooting                                                                                                  |
+| --falcon-url        | FALCON_URL        | https://api.crowdstrike.com | Falcon: Url to the API, __not__ the console.                                                                                                                |
+| --falcon-api-id     | FALCON_API_ID     | ``                          | Falcon: API ID for the created key                                                                                                                          |
+| --falcon-api-secret | FALCON_API_SECRET | ``                          | Falcon: API Secret for the created key                                                                                                                      |
+| --humio-url         | HUMIO_URL         | https://cloud.humio.com     | Humio: Url for the Humio Cluster for events to go                                                                                                           |
+| --humio-token       | HUMIO_TOKEN       | ``                          | Humio: Ingest token, remember to assign correct parser                                                                                                      |
+| --app-id            | APP_ID            | cses2humio                  | Advanced: Specific to Falcon Event Stream, don't change unless you know what you're doing!                                                                  |
+| --user-agent        | USER_AGENT        | cses2humio/{version}        | Advanced: User agent used in HTTP requests                                                                                                                  |
+| --bulk-max-size     | BULK_MAX_SIZE     | 200                         | Advanced: Maximum number of events to send in bulk                                                                                                          |
+| --flush-wait-time   | FLUSH_WAIT_TIME   | 10                          | Advanced: Maximum wait time before flushing queue                                                                                                           |
+
+<br />
+
+You can also run the tool directly from commandline (using environment variables as well)
+
+```
+cses2humio -h
+usage: cses2humio [-h] [--offset-file OFFSET_FILE] [--enrich] [-v] [--falcon-url FALCON_URL] [--falcon-api-id FALCON_API_ID] [--falcon-api-secret FALCON_API_SECRET] [--humio-url HUMIO_URL] [--humio-token HUMIO_TOKEN] [--app-id APP_ID] [--user-agent USER_AGENT] [--bulk-max-size BULK_MAX_SIZE]
+                  [--flush-wait-time FLUSH_WAIT_TIME]
+
+CrowdStrike Falcon Event Stream to Humio
+
+optional arguments:
+  -h, --help            show this help message and exit
+
+General:
+  --offset-file OFFSET_FILE
+                        Location including filename for where to store offsets, default is current directory as offset.db
+  --enrich              Will parse some fields as they're hard to parse in Humio.Note this might be more resources intensive but spare Humio of parsing. Default is off
+  -v, --verbose         Increase output verbosity
+
+Falcon:
+  --falcon-url FALCON_URL
+                        Falcon API URL, note this is for the API given when you create the API key. Defaults to US-1 API url
+  --falcon-api-id FALCON_API_ID
+                        Falcon API ID to use for OAuth2
+  --falcon-api-secret FALCON_API_SECRET
+                        Falcon API Secret to use for OAuth2
+
+Humio:
+  --humio-url HUMIO_URL
+                        Humio URL for the cluster going to ingest data. Default to https://cloud.humio.com
+  --humio-token HUMIO_TOKEN
+                        Ingest token to use for ingesting data. Remember to assign the correct parser depending on parsing
+
+Advanced:
+  --app-id APP_ID       App ID to use for consuming events
+  --user-agent USER_AGENT
+                        User agent used to connect to services
+  --bulk-max-size BULK_MAX_SIZE
+                        Maximum number of events to send in bulk
+  --flush-wait-time FLUSH_WAIT_TIME
+                        Maximum time to wait if bulk max size isn't reached
+
+```
+
+<br />
 
 ## Building
 
-I will fill this out later
+```bash
+# Clone the repo and switch to it
+git clone https://github.com/Trifork-Security/cses2humio.git
+cd cses2humio
+```
+
+```bash
+# Create virtual environment and activate (optional, but recommended)
+python3 -m venv venv
+source venv/bin/activate
+```
+
+```bash
+# Install build and build the package (used in Dockerfile)
+pip3 install build
+python3 -m build 
+```
+
+```bash
+# Build the docker image
+docker build -t [TAG_FOR_IMAGE] .
+```
+
+<br />
 
 ## Contributing
 
-I will fill this out later
+Please feel free to contribute at any time by doing a PR.
+
+<br />
+
+## License
+
+[Apache License 2.0](/LICENSE)
