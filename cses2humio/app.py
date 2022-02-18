@@ -190,6 +190,8 @@ def signal_handler(signum, frame):
 
 
 def app_run(args):
+    threading.current_thread().name = "controller"
+
     pp_args(args)
 
     if args.verbose:
