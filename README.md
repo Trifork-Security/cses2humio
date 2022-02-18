@@ -28,6 +28,8 @@ The application error handling could be better, and the primary way to respond t
 
 - Initial release (fails to refresh stream after 30 minutes, please don't use this)
 
+<br />
+
 ## Prerequisite
 
 For setting up the connection you need two types of credentials ready.
