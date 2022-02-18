@@ -216,6 +216,8 @@ docker build -t [TAG_FOR_IMAGE] .
  - [ ] Offset file based on Humio
  - [ ] Next-gen format for logs for better use
 
+<br />
+
 ## Contributing
 
 Please feel free to contribute at any time by doing a PR.
