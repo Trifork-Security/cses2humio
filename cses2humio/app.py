@@ -74,18 +74,28 @@ def partition_stream_thread(args, falcon, humio, stream):
     }
 
     events = list()
-    last_refresh = datetime.utcnow()
+
+    refresh_interval_calc = timedelta(seconds=(refresh_interval * 0.9))
+    next_refresh = datetime.utcnow() + refresh_interval_calc
+    log.debug(
+        f"Next refresh of stream at {next_refresh}Z. "
+        f"We got refresh interval of {refresh_interval}. "
+        f"Setting it to 90% before {refresh_interval_calc}"
+    )
+
     last_flush = datetime.utcnow()
 
-    log.info(f"I'm ready! Starting the stream at {params['offset']} for partition {partition}")
+    log.info(
+        f"I'm ready! Starting the stream at {params['offset']} for partition {partition}"
+    )
     with requests.get(
         url=stream_url, headers=stream_headers, params=params, stream=True
     ) as r:
         for line in r.iter_lines():
             try:
                 if line:
+                    log.debug(line)
                     decoded_line = line.decode("utf-8")
-                    log.debug(decoded_line)
 
                     if args.enrich:
                         # Load the json event
@@ -147,9 +157,7 @@ def partition_stream_thread(args, falcon, humio, stream):
                     last_flush = datetime.utcnow()
 
                 # Check if we have exceeded 90% of refresh time, then refresh.
-                if (
-                    last_refresh + timedelta(minutes=(refresh_interval * 0.9))
-                ) <= datetime.utcnow():
+                if next_refresh <= datetime.utcnow():
                     refresh = falcon.refresh_active_stream(
                         app_id=args.app_id,
                         partition=partition,
@@ -159,9 +167,9 @@ def partition_stream_thread(args, falcon, humio, stream):
                     if refresh["status_code"] != 200:
                         raise Exception(f"Failed to refresh stream : {refresh}")
 
-                    log.debug(refresh)
+                    log.debug(f"Refresh the stream : {refresh}")
                     log.info("Refreshed active stream.")
-                    last_refresh = datetime.utcnow()
+                    next_refresh = datetime.utcnow() + refresh_interval_calc
 
                 if exit_event.is_set():
                     log.info("Going to exit...")
@@ -171,6 +179,9 @@ def partition_stream_thread(args, falcon, humio, stream):
                 exit_event.set()
                 log.exception("Got unexpected error in thread, ending all threads.")
                 break
+
+    exit_event.set()
+    log.debug("Stream exited")
 
 
 def signal_handler(signum, frame):
@@ -202,7 +213,7 @@ def app_run(args):
 
     log.info("Getting available event streams")
     streams = falcon.list_available_streams(app_id=args.app_id, format="json")
-    log.debug(json.dumps(streams))
+    log.debug(f"Got response for streams : {json.dumps(streams)}")
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -226,7 +237,14 @@ def app_run(args):
 
     log.info("Starting thread for each stream")
     threads = []
-    for stream in streams["body"]["resources"]:
+
+    try:
+        streams = streams["body"]["resources"]
+    except KeyError:
+        log.error(f"Could not find any streams in response : {streams}")
+        sys.exit(1)
+
+    for stream in streams:
         t = threading.Thread(
             target=partition_stream_thread,
             args=(
@@ -346,7 +364,7 @@ def cli():
     advanced.add_argument(
         "--bulk-max-size",
         default=200,
-        type=str,
+        type=int,
         action="store",
         help="Maximum number of events to send in bulk",
     )
@@ -354,7 +372,7 @@ def cli():
     advanced.add_argument(
         "--flush-wait-time",
         default=10,
-        type=str,
+        type=int,
         action="store",
         help="Maximum time to wait if bulk max size isn't reached",
     )

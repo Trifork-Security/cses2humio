@@ -141,7 +141,7 @@ cython_debug/
 .idea/
 
 # Offset db
-offset.db
+*.db
 
 # Backup
 bak/

@@ -16,6 +16,18 @@ The application error handling could be better, and the primary way to respond t
 
 <br />
 
+## Changelog
+
+### v0.0.2
+
+- Fixed refresh of streams that didn't happen in a timely manner
+- Fixed arguments where specifying integer arguments would be parsed as strings
+- Improved debug and info logging for better troubleshooting
+
+### v0.0.1
+
+- Initial release (fails to refresh stream after 30 minutes, please don't use this)
+
 ## Prerequisite
 
 For setting up the connection you need two types of credentials ready.
@@ -194,6 +206,13 @@ docker build -t [TAG_FOR_IMAGE] .
 ```
 
 <br />
+
+## Todo
+
+ - [ ] Unit testing
+ - [ ] Better error handling
+ - [ ] Offset file based on Humio
+ - [ ] Next-gen format for logs for better use
 
 ## Contributing
 
