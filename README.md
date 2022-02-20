@@ -140,9 +140,9 @@ You can specify run arguments as command lines or environment variables (same as
 | --bulk-max-size     | BULK_MAX_SIZE     | Advanced: Maximum number of events to send in bulk<br />Default: `200`                                                                                                                |
 | --flush-wait-time   | FLUSH_WAIT_TIME   | Advanced: Maximum wait time before flushing queue<br />Default: `10`                                                                                                                  |
 | --stream-timeout    | STREAM_TIMEOUT    | Advanced: Timeout for the event stream connection<br />Default: `60`                                                                                                                  |
-| --retry-timer       | RETRY_TIMER       | Advanced: How long to wait before retrieving streams between failures <br />Default: `60`                                                                                             |
-| --appid-random      | APPID_RANDOM      | Advanced: How many retries before going with random app id, zero is considered disabled<br />Default: `0`                                                                             |
-| --keepalive         | KEEPALIVE         | Advanced: How often to verify threads are alive<br />Default: `60`                                                                                                                    |
+| --retry-timer       | RETRY_TIMER       | Advanced: How long to wait before retrieving streams between failures <br />Default: `300`                                                                                            |
+| --appid-random      | APPID_RANDOM      | Advanced: How many retries before going with random app id, zero is considered disabled<br />Default: `1`                                                                             |
+| --keepalive         | KEEPALIVE         | Advanced: How often to verify threads are alive<br />Default: `10`                                                                                                                    |
 | --exceptions        | EXCEPTIONS        | Advanced: Dump exceptions, used on top of verbose, will cause multiline logs<br />Default: `False`                                                                                    |
 
 <br />
