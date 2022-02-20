@@ -18,6 +18,11 @@ The application error handling could be better, and the primary way to respond t
 
 ## Changelog
 
+### v0.0.3
+- Improved stability of threads
+- Improved error handling, restarting threads when they die
+- Implemented workaround for app id that doesn't return anything after stream dies
+
 ### v0.0.2
 
 - Fixed refresh of streams that didn't happen in a timely manner
@@ -120,20 +125,25 @@ docker logs -f cses2humio
 
 You can specify run arguments as command lines or environment variables (same as command line, just all uppercase)
 
-| Argument&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Environment       | Description                                                                                                                                                                           |
-|----------------------------------------------------------------------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| --offset-file                                                                    | OFFSET_FILE       | General: Where to save offsets for partitions. File will be created automatically<br />Default: `offset.db`<br />Note that the `cses2humio.env.example` defaults to `/data/offset.db` |
-| --enrich                                                                         | ENRICH            | General: Parses the events before shipping to Humio, and expands some fields due to such parsing in Humio can be tricky<br />Default: `False`                                         |
-| --verbose                                                                        | VERBOSE           | General: Be verbose, use for debugging and troubleshooting<br />Default: `False`                                                                                                      |
-| --falcon-url                                                                     | FALCON_URL        | Falcon: Url to the API, __not__ the console<br />Default: `https://api.crowdstrike.com`                                                                                               |
-| --falcon-api-id                                                                  | FALCON_API_ID     | Falcon: API ID for the created key<br />Default: `N/A`                                                                                                                                |
-| --falcon-api-secret                                                              | FALCON_API_SECRET | Falcon: API Secret for the created key<br />Default: `N/A`                                                                                                                            |
-| --humio-url                                                                      | HUMIO_URL         | Humio: Url for the Humio Cluster for events to go<br />Default: `https://cloud.humio.com`                                                                                             |
-| --humio-token                                                                    | HUMIO_TOKEN       | Humio: Ingest token, remember to assign correct parser<br />Default: `N/A`                                                                                                            |
-| --app-id                                                                         | APP_ID            | Advanced: Specific to Falcon Event Stream, don't change unless you know what you're doing!<br />Default: `cses2humio`                                                                 |
-| --user-agent                                                                     | USER_AGENT        | Advanced: User agent used in HTTP requests<br />Default: `cses2humio/{version}`                                                                                                       |
-| --bulk-max-size                                                                  | BULK_MAX_SIZE     | Advanced: Maximum number of events to send in bulk<br />Default: 200`                                                                                                          |
-| --flush-wait-time                                                                | FLUSH_WAIT_TIME   | Advanced: Maximum wait time before flushing queue<br />Default: `10`                                                                                                           |
+| Argument&nbsp       | Environment       | Description                                                                                                                                                                           |
+|---------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| --offset-file       | OFFSET_FILE       | General: Where to save offsets for partitions. File will be created automatically<br />Default: `offset.db`<br />Note that the `cses2humio.env.example` defaults to `/data/offset.db` |
+| --enrich            | ENRICH            | General: Parses the events before shipping to Humio, and expands some fields due to such parsing in Humio can be tricky<br />Default: `False`                                         |
+| --verbose           | VERBOSE           | General: Be verbose, use for debugging and troubleshooting<br />Default: `False`                                                                                                      |
+| --falcon-url        | FALCON_URL        | Falcon: Url to the API, __not__ the console<br />Default: `https://api.crowdstrike.com`                                                                                               |
+| --falcon-api-id     | FALCON_API_ID     | Falcon: API ID for the created key<br />Default: `N/A`                                                                                                                                |
+| --falcon-api-secret | FALCON_API_SECRET | Falcon: API Secret for the created key<br />Default: `N/A`                                                                                                                            |
+| --humio-url         | HUMIO_URL         | Humio: Url for the Humio Cluster for events to go<br />Default: `https://cloud.humio.com`                                                                                             |
+| --humio-token       | HUMIO_TOKEN       | Humio: Ingest token, remember to assign correct parser<br />Default: `N/A`                                                                                                            |
+| --app-id            | APP_ID            | Advanced: Specific to Falcon Event Stream, don't change unless you know what you're doing!<br />Default: `cses2humio`                                                                 |
+| --user-agent        | USER_AGENT        | Advanced: User agent used in HTTP requests<br />Default: `cses2humio/{version}`                                                                                                       |
+| --bulk-max-size     | BULK_MAX_SIZE     | Advanced: Maximum number of events to send in bulk<br />Default: `200`                                                                                                                |
+| --flush-wait-time   | FLUSH_WAIT_TIME   | Advanced: Maximum wait time before flushing queue<br />Default: `10`                                                                                                                  |
+| --stream-timeout    | STREAM_TIMEOUT    | Advanced: Timeout for the event stream connection<br />Default: `60`                                                                                                                  |
+| --retry-timer       | RETRY_TIMER       | Advanced: How long to wait before retrieving streams between failures <br />Default: `60`                                                                                             |
+| --appid-random      | APPID_RANDOM      | Advanced: How many retries before going with random app id, zero is considered disabled<br />Default: `0`                                                                             |
+| --keepalive         | KEEPALIVE         | Advanced: How often to verify threads are alive<br />Default: `60`                                                                                                                    |
+| --exceptions        | EXCEPTIONS        | Advanced: Dump exceptions, used on top of verbose, will cause multiline logs<br />Default: `False`                                                                                    |
 
 <br />
 
@@ -142,7 +152,7 @@ You can also run the tool directly from commandline (using environment variables
 ```
 cses2humio -h
 usage: cses2humio [-h] [--offset-file OFFSET_FILE] [--enrich] [-v] [--falcon-url FALCON_URL] [--falcon-api-id FALCON_API_ID] [--falcon-api-secret FALCON_API_SECRET] [--humio-url HUMIO_URL] [--humio-token HUMIO_TOKEN] [--app-id APP_ID] [--user-agent USER_AGENT] [--bulk-max-size BULK_MAX_SIZE]
-                  [--flush-wait-time FLUSH_WAIT_TIME]
+                  [--flush-wait-time FLUSH_WAIT_TIME] [--stream-timeout STREAM_TIMEOUT] [--retry-timer RETRY_TIMER] [--appid-random APPID_RANDOM] [--keepalive KEEPALIVE] [--exceptions]
 
 CrowdStrike Falcon Event Stream to Humio
 
@@ -177,7 +187,15 @@ Advanced:
                         Maximum number of events to send in bulk
   --flush-wait-time FLUSH_WAIT_TIME
                         Maximum time to wait if bulk max size isn't reached
-
+  --stream-timeout STREAM_TIMEOUT
+                        Timeout for the event stream connection
+  --retry-timer RETRY_TIMER
+                        How long to wait before retrieving streams between failures
+  --appid-random APPID_RANDOM
+                        How many retries before going with random app id, 0 = disabled
+  --keepalive KEEPALIVE
+                        How often to verify threads are alive
+  --exceptions          Dump exceptions, used on top of verbose, will cause multiline logs
 ```
 
 <br />

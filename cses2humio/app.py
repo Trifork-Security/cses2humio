@@ -3,11 +3,11 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 from datetime import datetime, timedelta
 from os.path import exists
-from time import sleep
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -25,6 +25,13 @@ log = logging.getLogger(__name__)
 
 lock = threading.Lock()
 exit_event = threading.Event()
+
+
+def random_app_id(app_id):
+    from random import randint
+    rand_len = 31 - len(app_id)
+    rand = ''.join(str(randint(0, 9)) for _ in range(rand_len))
+    return f"{app_id}-{rand}"
 
 
 def write_offset(file, partition, offset):
@@ -50,20 +57,16 @@ def create_offset_file(file):
         f.write(json.dumps(data))
 
 
-def partition_stream_thread(args, falcon, humio, stream):
-    # Get stream information
-    stream_url = stream["dataFeedURL"]
-    stream_token = stream["sessionToken"]["token"]
-    refresh_interval = int(stream["refreshActiveSessionInterval"])
+def retrieve_partition_from_url(url):
+    return int(urlparse(url).path.split("/")[-1])
 
-    # Extract partition from stream URL
-    partition = int(urlparse(stream_url).path.split("/")[-1])
 
-    # Set thread name for intuitive logging
-    threading.current_thread().name = f"partition-{partition}"
+def stream_thread(args, falcon, humio, stream):
+    partition = stream["partition"]
+    refresh_interval_delta = stream["refresh_delta"]
 
-    stream_headers = {
-        "Authorization": f"Token {stream_token}",
+    headers = {
+        "Authorization": f"Token {stream['token']}",
         "Accept": "application/json",
         "Content-Type": "application/json",
         "Connection": "keep-alive",
@@ -74,119 +77,243 @@ def partition_stream_thread(args, falcon, humio, stream):
         "offset": int(get_offset(args.offset_file, partition)),
     }
 
+    last_flush = datetime.utcnow()
     events = list()
 
-    refresh_interval_calc = timedelta(seconds=(refresh_interval * 0.9))
-    next_refresh = datetime.utcnow() + refresh_interval_calc
-    log.debug(
-        f"Next refresh of stream at {next_refresh}Z. "
-        f"We got refresh interval of {refresh_interval}. "
-        f"Setting it to 90% before {refresh_interval_calc}"
-    )
-
-    last_flush = datetime.utcnow()
-
+    next_refresh = datetime.utcnow() + refresh_interval_delta
     log.info(
-        f"I'm ready! Starting the stream at {params['offset']} for partition {partition}"
+        f"Next refresh of stream at {next_refresh}Z. "
+        f"We got refresh interval of {stream['refresh_interval']}. "
+        f"Setting it to 85% before, {refresh_interval_delta}"
     )
-    with requests.get(
-        url=stream_url, headers=stream_headers, params=params, stream=True
-    ) as r:
-        for line in r.iter_lines():
-            if line:
-                decoded_line = line.decode("utf-8")
-                log.debug(decoded_line)
 
-                if args.enrich:
-                    # Load the json event
-                    try:
-                        json_event = json.loads(decoded_line)
-                    except json.decoder.JSONDecodeError:
-                        raise Exception(f"Unable to parse json for message : {decoded_line}")
+    while not exit_event.is_set():
+        try:
+            with requests.get(
+                url=stream["url"],
+                headers=headers,
+                params=params,
+                stream=True,
+                timeout=args.stream_timeout,
+            ) as r:
+                for line in r.iter_lines():
+                    if line:
+                        decoded_line = line.decode("utf-8")
+                        log.debug(decoded_line)
 
-                    # Create the Humio event with timestamp and readable rawstring
-                    event = {
-                        "timestamp": json_event["metadata"]["eventCreationTime"],
-                        "rawstring": decoded_line,
-                    }
+                        if args.enrich:
+                            # Load the json event
+                            try:
+                                json_event = json.loads(decoded_line)
+                            except json.decoder.JSONDecodeError:
+                                if args.verbose:
+                                    log.error(
+                                        f"Unable to parse json for message : {decoded_line}"
+                                    )
+                                continue
 
-                    # Parse AuditKeyValues for better use in Humio
-                    audit_kv = json_event["event"].get("AuditKeyValues")
-                    if audit_kv:
-                        for kv in audit_kv:
-                            json_event["event"][kv["Key"]] = kv["ValueString"]
-                        json_event["event"].pop("AuditKeyValues", None)
+                            # Create the Humio event with timestamp and readable rawstring
+                            event = {
+                                "timestamp": json_event["metadata"][
+                                    "eventCreationTime"
+                                ],
+                                "rawstring": decoded_line,
+                            }
 
-                    event["attributes"] = json_event
-                    events.append(event)
-                else:
-                    # Append to event list
-                    events.append(decoded_line)
+                            # Parse AuditKeyValues for better use in Humio
+                            audit_kv = json_event["event"].get("AuditKeyValues")
+                            if audit_kv:
+                                for kv in audit_kv:
+                                    json_event["event"][kv["Key"]] = kv["ValueString"]
+                                json_event["event"].pop("AuditKeyValues", None)
 
-            # If flush_wait_time or bulk_max_size exceeded and have events in queue (love black format!)
-            if (
-                datetime.utcnow()
-                >= (last_flush + timedelta(seconds=args.flush_wait_time))
-                or (len(events) >= args.bulk_max_size)
-            ) and len(events) != 0:
-                if args.enrich:
-                    offset = json_event["metadata"]["offset"] + 1
-                else:
-                    # We only parse the last event to get the current offset
-                    offset = json.loads(decoded_line)["metadata"]["offset"] + 1
+                            event["attributes"] = json_event
+                            events.append(event)
+                        else:
+                            # Append to event list
+                            events.append(decoded_line)
 
-                ingest = requests.post(
-                    url=humio["url"],
-                    headers=humio["header"],
-                    json=[{humio["event_keyword"]: events}],
-                )
-                if ingest.status_code != 200:
-                    raise Exception(
-                        "Error shipping logs to Humio : {}".format(ingest.content)
-                    )
+                    # If flush_wait_time or bulk_max_size exceeded and have events in queue (love black format!)
+                    if (
+                        datetime.utcnow()
+                        >= (last_flush + timedelta(seconds=args.flush_wait_time))
+                        or (len(events) >= args.bulk_max_size)
+                    ) and len(events) != 0:
+                        if args.enrich:
+                            offset = json_event["metadata"]["offset"] + 1
+                        else:
+                            # We only parse the last event to get the current offset
+                            offset = json.loads(decoded_line)["metadata"]["offset"] + 1
 
-                # Obtain thread lock and write offset
-                with lock:
-                    write_offset(args.offset_file, partition, offset)
+                        ingest = requests.post(
+                            url=humio["url"],
+                            headers=humio["header"],
+                            json=[{humio["event_keyword"]: events}],
+                        )
 
-                # Log current status
-                log.info(
-                    f"Shipped {len(events)} events to Humio. "
-                    f"We're now at offset {offset} for partition {partition}."
-                )
+                        if ingest.status_code != 200:
+                            log.debug(f"Failed to ingest events : {ingest}")
+                            log.error(
+                                f"Failed to ingest events. "
+                                f"Trying again in next flush or bulk {args.flush_wait_time}"
+                            )
+                        else:
+                            # Obtain thread lock and write offset
+                            with lock:
+                                write_offset(args.offset_file, partition, offset)
 
-                # Clear event queue and update last flush time
-                events.clear()
-                last_flush = datetime.utcnow()
+                            # Log current status
+                            log.info(
+                                f"Shipped {len(events)} events to Humio. "
+                                f"We're now at offset {offset} for partition {partition}."
+                            )
 
-            # Check if we have exceeded 90% of refresh time, then refresh.
-            if next_refresh <= datetime.utcnow():
-                refresh = falcon.refresh_active_stream(
-                    app_id=args.app_id,
-                    partition=partition,
-                    user_agent=args.user_agent,
-                )
+                            events.clear()  # Clear event queue and update last flush time
 
-                if refresh["status_code"] != 200:
-                    raise Exception(f"Failed to refresh stream : {refresh}")
+                        last_flush = datetime.utcnow()
 
-                log.debug(f"Refreshed the stream : {refresh}")
-                next_refresh = datetime.utcnow() + refresh_interval_calc
-                log.info(f"Refreshed active stream. Next refresh at {next_refresh}")
+                    # Check if we have exceeded 90% of refresh time, then refresh.
+                    if next_refresh <= datetime.utcnow():
+                        refresh = falcon.refresh_active_stream(
+                            app_id=args.app_id,
+                            partition=partition,
+                            user_agent=args.user_agent,
+                        )
 
-            if exit_event.is_set():
-                log.info("Going to exit...")
-                break
+                        if refresh["status_code"] != 200:
+                            log.debug(f"Failed to refresh stream : {refresh}")
+                            next_refresh = datetime.utcnow() + timedelta(seconds=30)
+                            log.error(
+                                f"Failed to refresh stream, trying in 30 seconds at {next_refresh}"
+                            )
+                        else:
+                            log.debug(f"Refreshed the stream : {refresh}")
+                            next_refresh = datetime.utcnow() + refresh_interval_delta
+                            log.info(
+                                f"Refreshed active stream. Next refresh at {next_refresh}"
+                            )
+
+                    if exit_event.is_set():
+                        r.close()
+                        log.info("Going to exit...")
+                        break
+
+        except (requests.exceptions.ConnectionError, socket.timeout):
+            if args.verbose and args.exceptions:
+                log.exception("ConnectionError")
+
+            log.error(f"Stream for partition {stream['partition']} timed out.")
+
+            r.close()
+            sys.exit(1)
 
     log.debug("Stream exited")
 
 
+# noinspection PyUnusedLocal
 def signal_handler(signum, frame):
     log.info(f"Got {signal.Signals(signum).name}, exiting...")
     exit_event.set()
 
 
-def app_run(args):
+def start_thread(args, falcon, humio, stream):
+    t = threading.Thread(
+        target=stream_thread,
+        args=(
+            args,
+            falcon,
+            humio,
+            stream,
+        ),
+        name=f"partition-{stream['partition']}",
+        daemon=True,
+    )
+    t.start()
+
+    log.info(f"Started thread stream for partition {stream['partition']}")
+
+    return t
+
+
+def parse_stream(stream):
+    res = {
+        "url": stream["dataFeedURL"],
+        "token": stream["sessionToken"]["token"],
+        "refresh_interval": int(stream["refreshActiveSessionInterval"]),
+    }
+
+    # Extract partition from stream URL
+    res["partition"] = retrieve_partition_from_url(res["url"])
+
+    res["refresh_delta"] = timedelta(seconds=(res["refresh_interval"] * 0.85))
+
+    return res
+
+
+def get_streams(falcon, args, partition=-1):
+    if partition == -1:
+        log.info("Getting available event streams")
+
+    # I've encountered multiple times getting an empty resource list, this is to re-try in the case and
+    # handling the graceful exit so end-user isn't stuck.
+    streams_response = None
+    retires = 1
+
+    while not exit_event.is_set():
+        app_id = args.app_id
+        if args.appid_random != 0 and retires > args.appid_random:
+            rnd_appid = random_app_id(args.app_id)
+            log.info(f"Could not retrieve stream with App ID {args.app_id}, generating a random one {rnd_appid}.")
+            app_id = rnd_appid
+
+        streams = falcon.list_available_streams(app_id=app_id, format="json")
+        log.debug(
+            f"Got response for streams, we're getting partition {partition} : {json.dumps(streams)}"
+        )
+        streams_response = streams.get("body").get("resources")
+        if streams['status_code'] != 200 or streams_response is None:
+            log.error(
+                f"Could not find any streams in response. "
+                f"Make sure app id isn't used for multiple streams. Retrying..."
+            )
+            retires += 1
+            exit_event.wait(args.retry_timer)
+        else:
+            break
+
+    if exit_event.is_set():
+        sys.exit(1)
+
+    streams = [parse_stream(s) for s in streams_response]
+    if partition == -1:
+        log.info("Stream URL(s) received")
+        return streams
+    else:
+        return [s for s in streams if s["partition"] == partition]
+
+
+def app_run(args, falcon, humio):
+    streams = get_streams(falcon, args)
+
+    threads = {}
+    for stream in streams:
+        threads[stream["partition"]] = start_thread(args, falcon, humio, stream)
+
+    while not exit_event.is_set():
+        for p, t in threads.items():
+            if not t.is_alive():
+                log.error(f"Dead thread detected for partition {p}... Restarting...")
+                stream = get_streams(falcon, args, partition=p)[0]
+                threads[p] = start_thread(args, falcon, humio, stream)
+
+        log.debug(
+            "Checking threads ({})".format(", ".join([str(k) for k in threads.keys()]))
+        )
+
+        exit_event.wait(args.keepalive)
+
+
+def app_prepare(args):
     threading.current_thread().name = "controller"
 
     pp_args(args)
@@ -210,10 +337,6 @@ def app_run(args):
         log.error(f"Failed to obtain OAuth2 token : {falcon.token_fail_reason}")
         sys.exit(1)
 
-    log.info("Getting available event streams")
-    streams = falcon.list_available_streams(app_id=args.app_id, format="json")
-    log.debug(f"Got response for streams : {json.dumps(streams)}")
-
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -234,38 +357,7 @@ def app_run(args):
         },
     }
 
-    log.info("Starting thread for each stream")
-    threads = []
-
-    streams = streams.get("body").get("resources")
-
-    if not streams:
-        log.error(f"Could not find any streams, make sure app id isn't used multiple streams : {streams}")
-        sys.exit(1)
-
-    for stream in streams:
-        t = threading.Thread(
-            target=partition_stream_thread,
-            args=(
-                args,
-                falcon,
-                humio,
-                stream,
-            ),
-            daemon=True,
-        )
-        t.start()
-        threads.append(t)
-
-    while not exit_event.is_set():
-        for t in threads:
-            if not t.is_alive():
-                log.debug("Going to re-start dead thread!")
-                t.start()
-
-        log.debug("All threads verified")
-        sleep(60)
-
+    app_run(args, falcon, humio)
 
 
 def pp_args(args):
@@ -383,15 +475,53 @@ def cli():
         help="Maximum time to wait if bulk max size isn't reached",
     )
 
+    advanced.add_argument(
+        "--stream-timeout",
+        default=60,
+        type=int,
+        action="store",
+        help="Timeout for the event stream connection",
+    )
+
+    advanced.add_argument(
+        "--retry-timer",
+        default=300,
+        type=int,
+        action="store",
+        help="How long to wait before retrieving streams between failures",
+    )
+
+    advanced.add_argument(
+        "--appid-random",
+        default=1,
+        type=int,
+        action="store",
+        help="How many retries before going with random app id, 0 = disabled",
+    )
+
+    advanced.add_argument(
+        "--keepalive",
+        default=10,
+        type=int,
+        action="store",
+        help="How often to verify threads are alive",
+    )
+
+    advanced.add_argument(
+        "--exceptions", help="Dump exceptions, used on top of verbose, will cause multiline logs", action="store_true"
+    )
+
     args = parser.parse_args()
 
     missing_args = []
     for arg in vars(args):
         env = os.environ.get(arg.upper())
         if env:
-            if arg in ("bulk_max_size", "bulk_max_size"):
+            if arg in (
+                    "bulk_max_size", "bulk_max_size", "stream_timeout", "retry_timer", "appid_random", "keepalive"
+            ):
                 env = int(env)
-            elif arg in ("verbose", "enrich"):
+            elif arg in ("verbose", "enrich", "exceptions"):
                 env = env.lower() in ("true", "1", "t")
 
             setattr(args, arg, env)
@@ -403,7 +533,7 @@ def cli():
         log.error(f"Please set missing variables: {', '.join(missing_args)}")
         sys.exit(1)
 
-    app_run(args)
+    app_prepare(args)
 
 
 if __name__ == "__main__":

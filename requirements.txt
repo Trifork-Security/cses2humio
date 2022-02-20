@@ -1,0 +1,4 @@
+# This file is NOT used for packaging but only to Github understand dependencies
+# https://github.com/dependabot/dependabot-core/issues/2133
+requests>=2.27.1
+crowdstrike-falconpy>=1.0.3
