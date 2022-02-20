@@ -29,8 +29,9 @@ exit_event = threading.Event()
 
 def random_app_id(app_id):
     from random import randint
+
     rand_len = 31 - len(app_id)
-    rand = ''.join(str(randint(0, 9)) for _ in range(rand_len))
+    rand = "".join(str(randint(0, 9)) for _ in range(rand_len))
     return f"{app_id}-{rand}"
 
 
@@ -127,7 +128,7 @@ def stream_thread(args, falcon, humio, stream):
                                     json_event["event"][kv["Key"]] = kv["ValueString"]
                                 json_event["event"].pop("AuditKeyValues", None)
 
-                            event["attributes"] = json_event
+                            event["attributes"] = {**humio["metadata"], **json_event}
                             events.append(event)
                         else:
                             # Append to event list
@@ -263,7 +264,9 @@ def get_streams(falcon, args, partition=-1):
         app_id = args.app_id
         if args.appid_random != 0 and retires > args.appid_random:
             rnd_appid = random_app_id(args.app_id)
-            log.info(f"Could not retrieve stream with App ID {args.app_id}, generating a random one {rnd_appid}.")
+            log.info(
+                f"Could not retrieve stream with App ID {args.app_id}, generating a random one {rnd_appid}."
+            )
             app_id = rnd_appid
 
         streams = falcon.list_available_streams(app_id=app_id, format="json")
@@ -271,7 +274,7 @@ def get_streams(falcon, args, partition=-1):
             f"Got response for streams, we're getting partition {partition} : {json.dumps(streams)}"
         )
         streams_response = streams.get("body").get("resources")
-        if streams['status_code'] != 200 or streams_response is None:
+        if streams["status_code"] != 200 or streams_response is None:
             log.error(
                 f"Could not find any streams in response. "
                 f"Make sure app id isn't used for multiple streams. Retrying..."
@@ -340,22 +343,21 @@ def app_prepare(args):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    if args.enrich:
-        event_keyword = "events"
-        humio_endpoint = "/api/v1/ingest/humio-structured"
-    else:
-        event_keyword = "messages"
-        humio_endpoint = "/api/v1/ingest/humio-unstructured"
-
     humio = {
-        "url": urljoin(args.humio_url, humio_endpoint),
-        "event_keyword": event_keyword,
         "header": {
             "Authorization": f"Bearer {args.humio_token}",
             "Content-Type": "application/json",
             "User-Agent": args.user_agent,
         },
     }
+
+    if args.enrich:
+        humio["metadata"] = {"@host": socket.gethostname(), "@stream": args.app_id}
+        humio["event_keyword"] = "events"
+        humio["url"] = urljoin(args.humio_url, "/api/v1/ingest/humio-structured")
+    else:
+        humio["event_keyword"] = "messages"
+        humio["url"] = urljoin(args.humio_url, "/api/v1/ingest/humio-unstructured")
 
     app_run(args, falcon, humio)
 
@@ -508,7 +510,9 @@ def cli():
     )
 
     advanced.add_argument(
-        "--exceptions", help="Dump exceptions, used on top of verbose, will cause multiline logs", action="store_true"
+        "--exceptions",
+        help="Dump exceptions, used on top of verbose, will cause multiline logs",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -518,7 +522,12 @@ def cli():
         env = os.environ.get(arg.upper())
         if env:
             if arg in (
-                    "bulk_max_size", "bulk_max_size", "stream_timeout", "retry_timer", "appid_random", "keepalive"
+                "bulk_max_size",
+                "bulk_max_size",
+                "stream_timeout",
+                "retry_timer",
+                "appid_random",
+                "keepalive",
             ):
                 env = int(env)
             elif arg in ("verbose", "enrich", "exceptions"):
