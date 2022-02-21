@@ -68,7 +68,7 @@ For running the code one of the following is needed.
 * Go to the repository you're going to use
 * Depending on if you're going to run enriched or not.
 
-    * Enriched: Download the [siem-connector-enriched.yaml](siem-connector-enriched.yaml) parser
+    * Enriched: Download the [siem-connector-enriched.yaml](siem-connector-enriched.yaml) parser or install the [es-utils package](https://github.com/Trifork-Security/es-utils)
 
         * Go to `Parsers` and click `New Parser` then select `From template` 
 
