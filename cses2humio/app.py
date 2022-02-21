@@ -358,7 +358,9 @@ def app_prepare(args):
     }
 
     if args.enrich:
-        humio["metadata"] = {"@host": socket.gethostname(), "@stream": args.app_id}
+        env_hostname = os.environ.get('HOST')
+        hostname = env_hostname if env_hostname  else socket.getfqdn()
+        humio["metadata"] = {"@host": hostname, "@stream": args.app_id}
         humio["event_keyword"] = "events"
         humio["url"] = urljoin(args.humio_url, "/api/v1/ingest/humio-structured")
     else:
