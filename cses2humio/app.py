@@ -126,7 +126,11 @@ def stream_thread(args, falcon, humio, stream):
                                 json_event["event"][kv["Key"]] = kv["ValueString"]
                             json_event["event"].pop("AuditKeyValues", None)
 
-                        event["attributes"] = {**humio["metadata"], **json_event}
+                        if args.metadata:
+                            event["attributes"] = {**humio["metadata"], **json_event}
+                        else:
+                            event["attributes"] = json_event
+
                         events.append(event)
                     else:
                         # Append to event list
@@ -358,9 +362,11 @@ def app_prepare(args):
     }
 
     if args.enrich:
-        env_hostname = os.environ.get('HOST')
-        hostname = env_hostname if env_hostname  else socket.getfqdn()
-        humio["metadata"] = {"@host": hostname, "@stream": args.app_id}
+        if args.metadata:
+            env_hostname = os.environ.get("HOST")
+            hostname = env_hostname if env_hostname else socket.getfqdn()
+            humio["metadata"] = {"@host": hostname, "@stream": args.app_id}
+
         humio["event_keyword"] = "events"
         humio["url"] = urljoin(args.humio_url, "/api/v1/ingest/humio-structured")
     else:
@@ -409,6 +415,13 @@ def cli():
         action="store_true",
         help="Will parse some fields as they're hard to parse in Humio."
         "Note this might be more resources intensive but spare Humio of parsing. "
+        "Default is off",
+    )
+
+    general.add_argument(
+        "--metadata",
+        action="store_true",
+        help="Will add metadata to event such as app id and host running the stream. Requires --enrich. "
         "Default is off",
     )
 
@@ -538,7 +551,7 @@ def cli():
                 "keepalive",
             ):
                 env = int(env)
-            elif arg in ("verbose", "enrich", "exceptions"):
+            elif arg in ("verbose", "enrich", "metadata", "exceptions"):
                 env = env.lower() in ("true", "1", "t")
 
             setattr(args, arg, env)

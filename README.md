@@ -18,6 +18,11 @@ The application error handling could be better, and the primary way to respond t
 
 ## Changelog
 
+### v0.0.4
+- Additional improvement upon stability
+- Migrated the enriched parser to Humio Package [Event Stream Utilities (es-utils)](https://github.com/Trifork-Security/es-utils)
+- Added the metadata parameter, sending ´@stream` and `@host` in Humio events
+
 ### v0.0.3
 - Improved stability of threads
 - Improved error handling, restarting threads when they die
@@ -107,6 +112,7 @@ Start the container with the newly configured environment file
 
 ```shell
 docker run -v $HOST_DATA_DIR:/data  \
+    -e HOST=$HOSTNAME
     --name=cses2humio \
     --env-file=$PATH_TO_CONFIG_FILE \
     --detach --restart=always \
@@ -129,6 +135,7 @@ You can specify run arguments as command lines or environment variables (same as
 |---------------------|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | --offset-file       | OFFSET_FILE       | General: Where to save offsets for partitions. File will be created automatically<br />Default: `offset.db`<br />Note that the `cses2humio.env.example` defaults to `/data/offset.db` |
 | --enrich            | ENRICH            | General: Parses the events before shipping to Humio, and expands some fields due to such parsing in Humio can be tricky<br />Default: `False`                                         |
+| --metadata          | METADATA          | General: Add @stream and @host to events in Humio, if the app is running in a container, set the `HOST` environment variable to what you want in `@host`<br />Default: `False`        |
 | --verbose           | VERBOSE           | General: Be verbose, use for debugging and troubleshooting<br />Default: `False`                                                                                                      |
 | --falcon-url        | FALCON_URL        | Falcon: Url to the API, __not__ the console<br />Default: `https://api.crowdstrike.com`                                                                                               |
 | --falcon-api-id     | FALCON_API_ID     | Falcon: API ID for the created key<br />Default: `N/A`                                                                                                                                |
@@ -151,7 +158,7 @@ You can also run the tool directly from commandline (using environment variables
 
 ```
 cses2humio -h
-usage: cses2humio [-h] [--offset-file OFFSET_FILE] [--enrich] [-v] [--falcon-url FALCON_URL] [--falcon-api-id FALCON_API_ID] [--falcon-api-secret FALCON_API_SECRET] [--humio-url HUMIO_URL] [--humio-token HUMIO_TOKEN] [--app-id APP_ID] [--user-agent USER_AGENT] [--bulk-max-size BULK_MAX_SIZE]
+usage: cses2humio [-h] [--offset-file OFFSET_FILE] [--enrich] [--metadata] [-v] [--falcon-url FALCON_URL] [--falcon-api-id FALCON_API_ID] [--falcon-api-secret FALCON_API_SECRET] [--humio-url HUMIO_URL] [--humio-token HUMIO_TOKEN] [--app-id APP_ID] [--user-agent USER_AGENT] [--bulk-max-size BULK_MAX_SIZE]
                   [--flush-wait-time FLUSH_WAIT_TIME] [--stream-timeout STREAM_TIMEOUT] [--retry-timer RETRY_TIMER] [--appid-random APPID_RANDOM] [--keepalive KEEPALIVE] [--exceptions]
 
 CrowdStrike Falcon Event Stream to Humio
@@ -163,6 +170,7 @@ General:
   --offset-file OFFSET_FILE
                         Location including filename for where to store offsets, default is current directory as offset.db
   --enrich              Will parse some fields as they're hard to parse in Humio.Note this might be more resources intensive but spare Humio of parsing. Default is off
+  --metadata            Will add metadata to event such as app id and host running the stream. Requires --enrich. Default is off
   -v, --verbose         Increase output verbosity
 
 Falcon:
