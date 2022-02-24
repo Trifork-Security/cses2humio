@@ -21,7 +21,7 @@ The application error handling could be better, and the primary way to respond t
 ### v0.0.4
 - Additional improvement upon stability
 - Migrated the enriched parser to Humio Package [Event Stream Utilities (es-utils)](https://github.com/Trifork-Security/es-utils)
-- Added the metadata parameter, sending ´@stream` and `@host` in Humio events
+- Added the metadata parameter, sending `@stream` and `@host` in Humio events
 
 ### v0.0.3
 - Improved stability of threads
